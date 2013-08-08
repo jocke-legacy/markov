@@ -3,20 +3,27 @@
 #include <string.h>
 #include <time.h>
 
+
 typedef struct {
    size_t length;
    size_t allocated;
    char **data;
 } ArrayList;
 
+
 ArrayList *arraylist_new(void);
 void arraylist_add(ArrayList *al, char *value);
 char *arraylist_str(ArrayList *al, char *delimiter);
 void arraylist_free(ArrayList *al);
 char *file_load(const char *filename);
+ArrayList *corpus_optimize(ArrayList *c, char *corpus_data, char *backup);
+ArrayList *corpus_populate(char *corpus_data, char **backup);
 ArrayList *corpus_prepare(char *corpus_data);
 ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness);
 char *markov(ArrayList *c, size_t pickiness, size_t length);
+
+
+size_t data_length;
 
 
 ArrayList *arraylist_new(void) {
@@ -51,31 +58,29 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
    char *str;
 
    str_length = 0;
-   for (i = 0; i < al->length; i++) {
+   for (i = 0; i < al->length - 1; i++) {
       str_length += strlen(al->data[i]);
    }
    str_length += al->length - 1;
 
-   str = malloc(sizeof(char) * str_length + 2);
+   str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1);
    *str = '\0';
-   for (i = 0; i < al->length; i++) {
+   for (i = 0; i < al->length - 1; i++) {
       strcat(str, al->data[i]);
       strcat(str, delimiter);
    }
-   *(str + str_length) = '\0';
+   *(str + str_length) = '\0'; /* no trailing delimiter */
 
    return str;
 }
 
 void arraylist_free(ArrayList *al) {
    free(al->data);
-   al->data = NULL;
    free(al);
 }
 
 
 char *file_load(const char *filename) {
-   size_t length;
    char *storage;
    FILE *fd;
 
@@ -85,18 +90,18 @@ char *file_load(const char *filename) {
    }
 
    fseek(fd, 0, SEEK_END);
-   length = ftell(fd);
+   data_length = ftell(fd);
    rewind(fd);
 
-   if ((storage = malloc(sizeof(char) * length)) == NULL) {
+   if ((storage = malloc(sizeof(char) * data_length)) == NULL) {
       fprintf(stderr, "Can't allocate storage for file.\n");
       exit(1);
    }
-   if (fread(storage, length, 1, fd) == 0) {
+   if (fread(storage, data_length, 1, fd) == 0) {
       fprintf(stderr, "Error while reading file\n");
       exit(1);
    }
-   *(storage + length - 1) = '\0';
+   *(storage + data_length) = '\0';
 
    fclose(fd);
 
@@ -104,9 +109,27 @@ char *file_load(const char *filename) {
 }
 
 
-ArrayList *corpus_prepare(char *corpus_data) {
+ArrayList *corpus_optimize(ArrayList *c, char *corpus_data, char *backup) {
+   ArrayList *co;
+   size_t i;
+
+   co = arraylist_new();
+
+   for (i = 0; i < c->length - 1; i++) {
+      /* Unpretty code */
+      arraylist_add(co, corpus_data + (strstr(backup, c->data[i]) - backup));
+   }
+
+   return co;
+}
+
+ArrayList *corpus_populate(char *corpus_data, char **backup) {
    ArrayList *c;
    char *ptr;
+
+   /* Unpretty code */
+   *backup = malloc(sizeof(char) * data_length);
+   memcpy(*backup, corpus_data, sizeof(char) * data_length);
 
    c = arraylist_new();
 
@@ -119,6 +142,20 @@ ArrayList *corpus_prepare(char *corpus_data) {
    return c;
 }
 
+ArrayList *corpus_prepare(char *corpus_data) {
+   ArrayList *c, *co;
+   char *backup;
+
+   c  = corpus_populate(corpus_data, &backup);
+   co = corpus_optimize(c, corpus_data, backup);
+
+   free(backup);
+   arraylist_free(c);
+   
+   return co;
+}
+
+
 ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness) {
    ArrayList *words;
    size_t i, j, start;
@@ -127,9 +164,9 @@ ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness)
    start = (sentence->length - 1) - (pickiness - 1);
            
    for (i = 0; i < (c->length - 1) - pickiness; i++) {
-      if (strcmp(sentence->data[start], c->data[i]) == 0) {
+      if (sentence->data[start] == c->data[i]) {
          for (j = 0; j < pickiness; j++) {
-            if (strcmp(c->data[i + j], sentence->data[start + j]) != 0) {
+            if (c->data[i + j] != sentence->data[start + j]) {
                break;
             }
          }
@@ -142,7 +179,6 @@ ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness)
                
    return words;
 }
- 
 
 char *markov(ArrayList *c, size_t pickiness, size_t length) {
    ArrayList *sentence, *nextwords;
@@ -201,13 +237,19 @@ void markov_timer(ArrayList *c) {
 int main() {
    ArrayList *c;
    char *corpus_data;
+   clock_t start;
 
    srand(time(NULL));
 
+   start = clock();
    corpus_data = file_load("corpus.txt");
    c = corpus_prepare(corpus_data);
+   start = clock() - start;
+
 
    markov_timer(c);
+
+   printf("Prepearing time: %f\n s", ((double) start / CLOCKS_PER_SEC));
 
    arraylist_free(c);
    free(corpus_data);
