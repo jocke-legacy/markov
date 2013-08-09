@@ -8,6 +8,7 @@
 
 #define ARRAYLIST_ALLOCATION_SIZE 1024
 
+
 typedef struct {
    size_t length;
    size_t allocated;
@@ -37,7 +38,7 @@ ArrayList *arraylist_new(void) {
 
    if ((al = malloc(sizeof(ArrayList))) == NULL) {
       perror("Can't create list");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
 
    memset(al, 0, sizeof(ArrayList));
@@ -57,7 +58,7 @@ void arraylist_add(ArrayList *al, char *value) {
       if ((al->data = realloc(al->data, sizeof(char *) * al->allocated))
             == NULL) {
          perror("Can't add element to list");
-         exit(1);
+         exit(EXIT_FAILURE);
       }
    }
 
@@ -93,7 +94,7 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
 
    if ((str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1)) == NULL) {
       perror("Can't allocate space for string");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
    *str = '\0';
    for (i = 0; i < al->length - 1; i++) {
@@ -119,7 +120,7 @@ Finite *finite_file_load(const char *filename) {
 
    if ((fd = fopen(filename, "r")) == NULL) {
       perror("Can't open file");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
 
    fseek(fd, 0, SEEK_END);
@@ -128,12 +129,12 @@ Finite *finite_file_load(const char *filename) {
 
    if ((f->data = malloc(sizeof(char) * f->size)) == NULL) {
       perror("Can't allocate space for file");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
 
    if (fread(f->data, f->size, 1, fd) == 0) {
       perror("Error while reading file");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
    f->data[f->size - 1] = '\0';
 
@@ -246,7 +247,7 @@ void markov_timer(ArrayList *c) {
    }
    average /= 10.0f;
 
-   printf("\nAverage: %f s\n", average);
+   printf("\nAverage generation time: %f s\n", average);
 }
 
 
@@ -262,23 +263,24 @@ int main() {
 
    /* As stated in the documentation for `hcreate`, the
     * implementation method leaves a possibility for
-    * collisions in hash tables if populated more than 80 %
+    * collisions in hash tables if populated more than 80%
     *
     * We allocate twice the size to ensure O(1) lookups */
    if (hcreate(corpus_data->size * 2) == 0) {
       perror("Can't create hashtable");
-      exit(1);
+      exit(EXIT_FAILURE);
    }
    c = corpus_prepare(corpus_data);
    start = clock() - start;
 
    markov_timer(c);
-   printf("Prepearing time: %f\n s", ((double) start / CLOCKS_PER_SEC));
+   printf("Prepearing time:\t %f s\n", ((double) start / CLOCKS_PER_SEC));
+
 
    hdestroy();
    arraylist_free(c);
    finite_free(corpus_data);
    
-   return 0;
+   return EXIT_SUCCESS;
 }
 
