@@ -6,6 +6,7 @@
 /* POSIX */
 #include <search.h>
 
+#define ARRAYLIST_ALLOCATION_SIZE 1024
 
 typedef struct {
    size_t length;
@@ -35,26 +36,27 @@ ArrayList *arraylist_new(void) {
    ArrayList *al;
 
    if ((al = malloc(sizeof(ArrayList))) == NULL) {
-      fprintf(stderr, "Cannot allocate list\n");
+      perror("Can't create list");
       exit(1);
-
    }
 
    memset(al, 0, sizeof(ArrayList));
-   al->allocated = 512;
 
    return al;
 }
 
 void arraylist_add(ArrayList *al, char *value) {
-   if (al->length == al->allocated || al->length == 0) {
-      if (al->length != 0) {
+   if (al->length == al->allocated || al->allocated == 0) {
+      if (al->allocated == 0) {
+         al->allocated = ARRAYLIST_ALLOCATION_SIZE;
+      }
+      else {
          al->allocated *= 2;
       }
 
       if ((al->data = realloc(al->data, sizeof(char *) * al->allocated))
             == NULL) {
-         fprintf(stderr, "Cannot reallocate list\n");
+         perror("Can't add element to list");
          exit(1);
       }
    }
@@ -89,7 +91,10 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
    }
    str_length += al->length - 1;
 
-   str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1);
+   if ((str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1)) == NULL) {
+      perror("Can't allocate space for string");
+      exit(1);
+   }
    *str = '\0';
    for (i = 0; i < al->length - 1; i++) {
       strcat(str, al->data[i]);
@@ -113,7 +118,7 @@ Finite *finite_file_load(const char *filename) {
    f = malloc(sizeof(Finite));
 
    if ((fd = fopen(filename, "r")) == NULL) {
-      fprintf(stderr, "Can't open file.\n");
+      perror("Can't open file");
       exit(1);
    }
 
@@ -122,12 +127,12 @@ Finite *finite_file_load(const char *filename) {
    rewind(fd);
 
    if ((f->data = malloc(sizeof(char) * f->size)) == NULL) {
-      fprintf(stderr, "Can't allocate storage for file.\n");
+      perror("Can't allocate space for file");
       exit(1);
    }
 
    if (fread(f->data, f->size, 1, fd) == 0) {
-      fprintf(stderr, "Error while reading file\n");
+      perror("Error while reading file");
       exit(1);
    }
    f->data[f->size - 1] = '\0';
@@ -261,7 +266,7 @@ int main() {
     *
     * We allocate twice the size to ensure O(1) lookups */
    if (hcreate(corpus_data->size * 2) == 0) {
-      printf("Can't create hashtable.\n");
+      perror("Can't create hashtable");
       exit(1);
    }
    c = corpus_prepare(corpus_data);
