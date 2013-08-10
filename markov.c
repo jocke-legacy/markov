@@ -3,10 +3,10 @@
 #include <string.h>
 #include <time.h>
 
-/* POSIX */
+/* GNU C Library */
 #include <search.h>
 
-#define ARRAYLIST_ALLOCATION_SIZE 1024
+#define ARRAYLIST_ALLOCATION_SIZE 1024 
 
 
 typedef struct {
@@ -297,7 +297,7 @@ void markov_timer(Finite *corpus) {
 
    for (i = 0; i < 10; i++) {
       start = clock();
-      sentence = markov(corpus, 2, 16);
+      sentence = markov(corpus, 3, 16);
       average += ((double) clock() - start) / CLOCKS_PER_SEC;
 
       printf("%s\n", sentence); 
@@ -322,8 +322,8 @@ int main() {
     * implementation method leaves a possibility for
     * collisions in hash tables if populated more than 80%
     *
-    * We allocate twice the size to ensure O(1) lookups */
-   if (hcreate(corpus->size * 2) == 0) {
+    * We allocate 150% the size to ensure O(1) lookups */
+   if (hcreate(corpus->size * 1.5f) == 0) {
       perror("Can't create hashtable");
       exit(EXIT_FAILURE);
    }
