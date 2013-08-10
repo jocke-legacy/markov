@@ -15,9 +15,18 @@ typedef struct {
    char **data;
 } ArrayList;
 
+/* This structure represents a finite file in
+ * the form of its size, data, words and lines
+ * so that they are easily accessible.
+ *
+ * The data is altered as a part of the
+ * preparation process. */
 typedef struct {
    size_t size;
    char *data;
+   char newline;
+   ArrayList *words;
+   ArrayList *lines;
 } Finite;
 
 
@@ -26,11 +35,12 @@ void arraylist_add(ArrayList *al, char *value);
 void arraylist_add_smart(ArrayList *al, char *value);
 char *arraylist_str(ArrayList *al, char *delimiter);
 void arraylist_free(ArrayList *al);
-Finite *finite_file_load(const char *filename);
-void finite_free(Finite *storage);
-ArrayList *corpus_prepare(Finite *corpus_data);
-ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness);
-char *markov(ArrayList *c, size_t pickiness, size_t length);
+Finite *finite_load(const char *filename);
+char *finite_nextword(Finite *f, char *word);
+void finite_prepare(Finite *f);
+void finite_free(Finite *f);
+ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, int pickiness);
+char *markov(Finite *corpus, int pickiness, size_t length);
 
 
 ArrayList *arraylist_new(void) {
@@ -65,6 +75,14 @@ void arraylist_add(ArrayList *al, char *value) {
    al->data[al->length++] = value;
 }
 
+/* This is an alternative way to add strings to our
+ * list. It uses a hashtable to determine wheter
+ * the same string already exists in the list. If so,
+ * we use the same location for both.
+ *
+ * This gives us the oppertunity to compare strings
+ * with pointers (which is fast) instead of using
+ * `strcmp`.   */
 void arraylist_add_smart(ArrayList *al, char *value) {
    ENTRY item;
    ENTRY *found;
@@ -87,7 +105,7 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
 
    str_length = 0;
 
-   for (i = 0; i < al->length - 1; i++) {
+   for (i = 0; i < al->length; i++) {
       str_length += strlen(al->data[i]);
    }
    str_length += al->length - 1;
@@ -97,7 +115,7 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
       exit(EXIT_FAILURE);
    }
    *str = '\0';
-   for (i = 0; i < al->length - 1; i++) {
+   for (i = 0; i < al->length; i++) {
       strcat(str, al->data[i]);
       strcat(str, delimiter);
    }
@@ -112,11 +130,12 @@ void arraylist_free(ArrayList *al) {
 }
 
 
-Finite *finite_file_load(const char *filename) {
+Finite *finite_load(const char *filename) {
    FILE *fd;
    Finite *f;
 
    f = malloc(sizeof(Finite));
+   f->newline = '\n';
 
    if ((fd = fopen(filename, "r")) == NULL) {
       perror("Can't open file");
@@ -132,7 +151,7 @@ Finite *finite_file_load(const char *filename) {
       exit(EXIT_FAILURE);
    }
 
-   if (fread(f->data, f->size, 1, fd) == 0) {
+   if (fread(f->data, f->size, 1, fd) != 1) {
       perror("Error while reading file");
       exit(EXIT_FAILURE);
    }
@@ -143,49 +162,80 @@ Finite *finite_file_load(const char *filename) {
    return f;
 }
 
+char *finite_nextword(Finite *f, char *word) {
+   char *nextword;
+
+   nextword = word + strlen(word) + 1;
+
+   return nextword < f->data + f->size - 1 ? nextword : NULL;
+}
+
+void finite_prepare(Finite *f) {
+   char *word;
+   char *line;
+
+   f->words = arraylist_new();
+   f->lines = arraylist_new();
+
+   word = strtok(f->data, " ");
+   while (word != NULL) {
+      arraylist_add_smart(f->words, word);
+
+       /* This is a manual `strtok` for newlines. The reason
+       * for this is because standard strtok doesn't give
+       * us the control we need to distinguish between
+       * given delimiters, so that we can do different
+       * operations depending on what we'd hit. */
+      if ((line = strchr(word, '\n')) != NULL) {
+         *line = '\0';
+         if (++line < f->data + f->size) {
+            /* We do normal add here because the location
+             * is important. */
+            arraylist_add(f->lines, line);
+
+            /* We also do a smart add as new lines also
+             * should be considered a new words. */
+            word = line;
+            arraylist_add(f->words, &f->newline);
+            arraylist_add_smart(f->words, word);
+
+         }
+      }
+
+      word = strtok(NULL, " ");
+   }
+}
+
 void finite_free(Finite *f) {
+   arraylist_free(f->lines);
+   arraylist_free(f->words);
    free(f->data);
    free(f);
 }
 
 
-ArrayList *corpus_prepare(Finite *corpus_data) {
-   char *ptr;
-   ArrayList *c;
-
-   c = arraylist_new();
-
-   ptr = strtok(corpus_data->data, " ");
-   while (ptr != NULL) {
-      arraylist_add_smart(c, ptr);
-      ptr = strtok(NULL, " ");
-   }
-
-   return c;
-}
-
-
-ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness) {
+ArrayList *markov_nextwords(ArrayList *corpus, ArrayList *sentence, int pickiness) {
    size_t i, j, start;
    ArrayList *words;
 
    words = arraylist_new();
    start = (sentence->length - 1) - (pickiness - 1);
            
-   for (i = 0; i < (c->length - 1) - pickiness; i++) {
+   for (i = 0; i < corpus->length - pickiness; i++) {
       /* We only need to compare the string pointers becasue
-       * `arraylist_add_smart` used in `corpus_prepare` maps
-       * existing words to their first occurences. So if the
-       * string is the same, the address is also the same */
-      if (sentence->data[start] == c->data[i]) {
-         for (j = 0; j < pickiness; j++) {
-            if (sentence->data[start + j] != c->data[i + j]) {
+       * `arraylist_add_smart` used in `finite_prepare` and
+       * `markov` maps existing words to their first
+       * occurences. So if the string is the same, the
+       * address is also the same   */
+      if (sentence->data[start] == corpus->data[i]) {
+         for (j = 0; j < (unsigned int) pickiness; j++) {
+            if (sentence->data[start + j] != corpus->data[i + j]) {
                break;
             }
          }
-         if (j == pickiness) {
+         if (j == (unsigned int) pickiness) {
              i += pickiness;
-             arraylist_add(words, c->data[i]);
+             arraylist_add(words, corpus->data[i]);
          }
       }
    }
@@ -193,28 +243,36 @@ ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, size_t pickiness)
    return words;
 }
 
-char *markov(ArrayList *c, size_t pickiness, size_t length) {
-   size_t i, randomword_index;
+char *markov(Finite *corpus, int pickiness, size_t length) {
+   int i;
    char *str, *word;
    ArrayList *sentence, *nextwords;
 
    sentence = arraylist_new();
-   randomword_index = rand() % ((c->length - 1) - pickiness);
+   word = corpus->lines->data[rand() % corpus->lines->length];
 
    for (i = 0; i < pickiness; i++) {
-        arraylist_add(sentence, c->data[randomword_index + i]);
+      if (word != NULL && *word != '\n') {
+         arraylist_add_smart(sentence, word);
+         word = finite_nextword(corpus, word);
+         length--;
+      }
+      else {
+         break;
+      }
    }
-   length -= pickiness;
 
-   while (length--) {
-      nextwords = markov_nextwords(c, sentence, pickiness);
+   while (length-- && i == pickiness && *word != '\n') {
+      nextwords = markov_nextwords(corpus->words, sentence, pickiness);
       if (nextwords->length > 0) {
          word = nextwords->data[rand() % nextwords->length];
-         arraylist_add(sentence, word);
-         arraylist_free(nextwords);
-         if (strchr(word, '\n') != NULL) {
-            break;
+
+         if (*word != '\n') {
+            arraylist_add(sentence, word);
          }
+            
+         arraylist_free(nextwords);
+
       }
       else {
          arraylist_free(nextwords);
@@ -229,7 +287,7 @@ char *markov(ArrayList *c, size_t pickiness, size_t length) {
 }
 
 
-void markov_timer(ArrayList *c) {
+void markov_timer(Finite *corpus) {
    int i;
    double average;
    char *sentence;
@@ -239,13 +297,13 @@ void markov_timer(ArrayList *c) {
 
    for (i = 0; i < 10; i++) {
       start = clock();
-      sentence = markov(c, 3, 16);
+      sentence = markov(corpus, 2, 16);
       average += ((double) clock() - start) / CLOCKS_PER_SEC;
 
-      printf("%s\n", sentence);
+      printf("%s\n", sentence); 
       free(sentence);
    }
-   average /= 10.0f;
+   average /= i;
 
    printf("\nAverage generation time: %f s\n", average);
 }
@@ -253,33 +311,30 @@ void markov_timer(ArrayList *c) {
 
 int main() {
    clock_t start;
-   ArrayList *c;
-   Finite *corpus_data;
+   Finite *corpus;
 
    srand(time(NULL));
 
    start = clock();
-   corpus_data = finite_file_load("corpus.txt");
+   corpus = finite_load("corpus.txt");
 
    /* As stated in the documentation for `hcreate`, the
     * implementation method leaves a possibility for
     * collisions in hash tables if populated more than 80%
     *
     * We allocate twice the size to ensure O(1) lookups */
-   if (hcreate(corpus_data->size * 2) == 0) {
+   if (hcreate(corpus->size * 2) == 0) {
       perror("Can't create hashtable");
       exit(EXIT_FAILURE);
    }
-   c = corpus_prepare(corpus_data);
+   finite_prepare(corpus);
    start = clock() - start;
 
-   markov_timer(c);
-   printf("Prepearing time:\t %f s\n", ((double) start / CLOCKS_PER_SEC));
-
+   markov_timer(corpus);
+   printf("Preparation time:\t%f s\n", ((double) start / CLOCKS_PER_SEC));
 
    hdestroy();
-   arraylist_free(c);
-   finite_free(corpus_data);
+   finite_free(corpus);
    
    return EXIT_SUCCESS;
 }
