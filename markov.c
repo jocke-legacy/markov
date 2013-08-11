@@ -35,12 +35,11 @@ typedef struct {
    HashTable *h;
 } Finite;
 
-void hash_add(HashTable **h, char *key, void *value);
-HashTable *hash_find(HashTable **h, char *key);
-void hash_free(HashTable **h);
+
 ArrayList *arraylist_new(void);
 void arraylist_add(ArrayList *al, char *value);
-void arraylist_add_smart(ArrayList *al, HashTable *h, char *value);
+void arraylist_add_smart(ArrayList *al, HashTable **h, char *value);
+void hash_free(HashTable **h); 
 char *arraylist_str(ArrayList *al, char *delimiter);
 void arraylist_free(ArrayList *al);
 Finite *finite_load(char *filename);
@@ -56,38 +55,6 @@ int compare(const void *p1, const void *p2);
 void printchr_iterate(char c, size_t length);
 void markov_timer(int times);
 
-
-void hash_add(HashTable **h, char *key, void *value) {
-   HashTable *new;
-
-   if (hash_find(h, key) != NULL) {
-      if ((new = malloc(sizeof(HashTable))) == NULL) {
-         perror("Cannot add field to hash table");
-         exit(EXIT_FAILURE);
-      }
-      new->key = key;
-      new->value = value;
-      HASH_ADD_KEYPTR(hh, *h, new->key, strlen(new->key), new);
-   }
-}
-
-HashTable *hash_find(HashTable **h, char *key) {
-   HashTable *found;
-
-   HASH_FIND_STR(*h, key, found);
-
-   return found;
-}
-
-void hash_free(HashTable **h) {
-   HashTable *curr, *tmp;
-
-   HASH_ITER(hh, *h, curr, tmp) {
-      HASH_DEL(*h, curr);
-      free(curr);
-   }
-   *h = NULL;
-}
 
 ArrayList *arraylist_new(void) {
    ArrayList *al;
@@ -124,19 +91,39 @@ void arraylist_add(ArrayList *al, char *value) {
  * This gives us the oppertunity to compare strings
  * with pointers (which is fast) instead of using
  * `strcmp`.   */
-void arraylist_add_smart(ArrayList *al, HashTable *h, char *value) {
-   HashTable *found;
+void arraylist_add_smart(ArrayList *al, HashTable **h, char *value) {
+   char *key_ptr;
+   HashTable *new, *found;
 
-   if ((found = hash_find(&h, value)) != NULL) {
+   key_ptr = value;
+
+   HASH_FIND_STR(*h, key_ptr, found);
+   if (found != NULL) {
       value = found->value;
    }
    else {
-      hash_add(&h, value, value);
+      if ((new = malloc(sizeof(HashTable))) == NULL) {
+         perror("Cannot add field to hash table");
+         exit(EXIT_FAILURE);
+      }
+      new->key = key_ptr;
+      new->value = value;
+      HASH_ADD_KEYPTR(hh, *h, key_ptr, strlen(key_ptr), new);
    }
 
    arraylist_add(al, value);
 }
- 
+
+void hash_free(HashTable **h) {
+   HashTable *curr, *tmp;
+
+   HASH_ITER(hh, *h, curr, tmp) {
+      HASH_DEL(*h, curr);
+      free(curr);
+   }
+   *h = NULL;
+}
+
 char *arraylist_str(ArrayList *al, char *delimiter) {
    size_t i, str_length;
    char *str;
@@ -211,27 +198,10 @@ void finite_prepare(Finite *f) {
 
    f->words  = arraylist_new();
    f->lines  = arraylist_new();
-
-/*   word = f->data;
-   while ((word = strchr(word, ' ' )) != NULL) {
-         hash_size++;
-         word++;
-   }*/
-   /* As stated in the documentation for `hcreate`, the
-    * implementation method leaves a possibility for
-    * collisions in hash tables if populated more than 80%
-    *
-    * We create a hashtable which should have 20% left when
-    * when considered fully populated, so that we can ensure
-    * O(1) lookups. */
-/*   if (hcreate(hash_size) == 0) {
-      perror("Can't create hashtable");
-      exit(EXIT_FAILURE);
-   }*/
  
    word = strtok(f->data, " ");
    while (word != NULL) {
-      arraylist_add_smart(f->words, f->h, word);
+      arraylist_add_smart(f->words, &f->h, word);
 
        /* This is a manual `strtok` for newlines. The reason
        * for this is because standard strtok doesn't give
@@ -249,7 +219,7 @@ void finite_prepare(Finite *f) {
              * should be considered a new words. */
             word = line;
             arraylist_add(f->words, &f->newline);
-            arraylist_add_smart(f->words, f->h, word);
+            arraylist_add_smart(f->words, &f->h, word);
          }
       }
 
@@ -318,7 +288,7 @@ char *markov(Finite *corpus, int pickiness, size_t length) {
     * possible word that should follow.   */
    for (i = 0; i < pickiness; i++) {
       if (word != NULL && *word != '\n') {
-         arraylist_add_smart(sentence, corpus->h, word);
+         arraylist_add_smart(sentence, &corpus->h, word);
          word = finite_nextword(corpus, word);
          length--;
       }
