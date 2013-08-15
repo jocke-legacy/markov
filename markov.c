@@ -57,7 +57,7 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length);
 double sum(double *arr, size_t length);
 int compare(const void *p1, const void *p2);
 void printchr_iterate(char c, size_t length);
-double decify(unsigned long int nsec);
+double ts2d(struct timespec *ts);
 void markov_timer(int times);
 
 
