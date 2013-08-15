@@ -12,10 +12,11 @@
 
 #define ARRAYLIST_ALLOCATION_SIZE 1024 
 #define FINITE_NEWLINE            NULL
+#define NANOSECS_IN_SEC           1000000000L
+
 
 typedef struct {
    char *key;
-//   char *value;
    UT_hash_handle hh;
 } HashTable;
 
@@ -65,7 +66,7 @@ ArrayList *arraylist_new(void) {
    ArrayList *al;
 
    if ((al = malloc(sizeof(ArrayList))) == NULL) {
-      perror("Can't create list");
+      perror("Error while creating list");
       exit(EXIT_FAILURE);
    }
 
@@ -80,7 +81,7 @@ void arraylist_add(ArrayList *al, char *value) {
       al->allocated *= al->allocated == 1 ? ARRAYLIST_ALLOCATION_SIZE : 2;
       if ((al->data = realloc(al->data, sizeof(char *) * al->allocated))
             == NULL) {
-         perror("Can't add element to list");
+         perror("Error while adding element to list");
          exit(EXIT_FAILURE);
       }
    }
@@ -97,22 +98,22 @@ void arraylist_add(ArrayList *al, char *value) {
  * with pointers (which is fast) instead of using
  * `strcmp`.   */
 void arraylist_add_smart(ArrayList *al, HashTable **h, char *value) {
-   char *key_ptr;
+   char *key;
    HashTable *new, *found;
 
-   key_ptr = value;
+   key = value;
 
-   HASH_FIND_STR(*h, key_ptr, found);
+   HASH_FIND_STR(*h, key, found);
    if (found != NULL) {
       value = found->key;
    }
    else {
       if ((new = malloc(sizeof(HashTable))) == NULL) {
-         perror("Cannot add field to hash table");
+         perror("Error while adding row to hash table");
          exit(EXIT_FAILURE);
       }
-      new->key = key_ptr;
-      HASH_ADD_KEYPTR(hh, *h, key_ptr, strlen(key_ptr), new);
+      new->key = key;
+      HASH_ADD_KEYPTR(hh, *h, key, strlen(key), new);
    }
 
    arraylist_add(al, value);
@@ -138,13 +139,13 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
    str_length += al->length - 1;
 
    if ((str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1)) == NULL) {
-      perror("Can't allocate space for string");
+      perror(NULL);
       exit(EXIT_FAILURE);
    }
    for (i = 0, *str = '\0'; i < al->length; i++) {
       strcat(strcat(str, al->data[i]), delimiter);
    }
-   *(str + str_length) = '\0'; /* no trailing delimiter */
+   str[str_length] = '\0'; /* no trailing delimiter */
 
    return str;
 }
@@ -163,7 +164,7 @@ Finite *finite_load(char *filename) {
    f->h = NULL;
 
    if ((fd = fopen(filename, "r")) == NULL) {
-      perror("Can't open file");
+      perror("Error while openining file");
       exit(EXIT_FAILURE);
    }
 
@@ -172,7 +173,7 @@ Finite *finite_load(char *filename) {
    rewind(fd);
 
    if ((f->data = malloc(sizeof(char) * f->size)) == NULL) {
-      perror("Can't allocate space for file");
+      perror("Error while loading file");
       exit(EXIT_FAILURE);
    }
 
@@ -188,11 +189,7 @@ Finite *finite_load(char *filename) {
 }
 
 char *finite_nextword(Finite *f, char *word) {
-   char *nextword;
-
-   nextword = word + strlen(word) + 1;
-
-   return nextword < f->data + f->size - 1 ? nextword : NULL;
+   return  (word += strlen(word) + 1) < f->data + f->size - 1 ? word : NULL;
 }
 
 void finite_prepare(Finite *f) {
@@ -297,8 +294,7 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
    for (i = 0; i < pickiness; i++) {
       /* Yes, this basically says "if word is not NULL and word is not NULL"
        * The reason though, even if FINITE_NEWLINE expands to NULL, the code
-       * is more readable this way. It won't affect any performance either as
-       * the compiler will optimise it away. */
+       * is more readable this way. */
       if (word != NULL && word != FINITE_NEWLINE) {
          arraylist_add_smart(sentence, &corpus->h, word);
          word = finite_nextword(corpus, word);
@@ -312,10 +308,6 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
    while (length-- && i == pickiness) {
       /* Line breaks are also considered words. This will terminate
        * the sentence a natural way.
-       *
-       * As a side effect, this will also terminate the sentence if
-       * there are no matching next word, because `markov_nextword`
-       * returns NULL for both cases.
        *
        * See commentary above.   */
       word = markov_nextword(corpus->words, sentence, pickiness);
@@ -382,7 +374,7 @@ void printchr_iterate(char c, size_t length) {
 }
 
 double ts2d(struct timespec *ts) {
-   return ts->tv_sec + (long double) ts->tv_nsec / 1000000000L;
+   return ts->tv_sec + (long double) ts->tv_nsec / NANOSECS_IN_SEC;
 }
 
 /* This function outputs some nice numbers to make our
@@ -408,7 +400,7 @@ void markov_timer(int times) {
    preptime = ts2d(&tsdiff(end, start));
 
    if ((times_ = malloc(sizeof(double) * times)) == NULL) {
-      perror("Can't allocate space");
+      perror(NULL);
       exit(EXIT_FAILURE);
    }
    for (i = 0; i < times; i++) {
