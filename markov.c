@@ -1,16 +1,22 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #include "uthash.h"
 
-#define ARRAYLIST_ALLOCATION_SIZE 1024 
+#define tsdiff(a, b) (struct timespec) { a.tv_sec  - b.tv_sec,    \
+                                         a.tv_nsec - b.tv_nsec }
 
+#define ARRAYLIST_ALLOCATION_SIZE 1024 
+#define FINITE_NEWLINE            NULL
 
 typedef struct {
    char *key;
-   char *value;
+//   char *value;
    UT_hash_handle hh;
 } HashTable;
 
@@ -29,7 +35,6 @@ typedef struct {
 typedef struct {
    size_t size;
    char *data;
-   char newline;
    ArrayList *words;
    ArrayList *lines;
    HashTable *h;
@@ -46,13 +51,14 @@ Finite *finite_load(char *filename);
 char *finite_nextword(Finite *f, char *word);
 void finite_prepare(Finite *f);
 void finite_free(Finite *f);
-ArrayList *markov_nextwords(ArrayList *c, ArrayList *sentence, int pickiness);
-char *markov(Finite *corpus, int pickiness, size_t length);
+char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int pickiness);
+char *markov(Finite *corpus, unsigned int pickiness, size_t length);
 
 /* Benchmarking functions and their needs. */
 double sum(double *arr, size_t length);
 int compare(const void *p1, const void *p2);
 void printchr_iterate(char c, size_t length);
+double decify(unsigned long int nsec);
 void markov_timer(int times);
 
 
@@ -99,7 +105,7 @@ void arraylist_add_smart(ArrayList *al, HashTable **h, char *value) {
 
    HASH_FIND_STR(*h, key_ptr, found);
    if (found != NULL) {
-      value = found->value;
+      value = found->key;
    }
    else {
       if ((new = malloc(sizeof(HashTable))) == NULL) {
@@ -107,7 +113,6 @@ void arraylist_add_smart(ArrayList *al, HashTable **h, char *value) {
          exit(EXIT_FAILURE);
       }
       new->key = key_ptr;
-      new->value = value;
       HASH_ADD_KEYPTR(hh, *h, key_ptr, strlen(key_ptr), new);
    }
 
@@ -156,7 +161,6 @@ Finite *finite_load(char *filename) {
    Finite *f;
 
    f = malloc(sizeof(Finite));
-   f->newline = '\n';
    f->h = NULL;
 
    if ((fd = fopen(filename, "r")) == NULL) {
@@ -212,13 +216,14 @@ void finite_prepare(Finite *f) {
          *line = '\0';
          if (++line < f->data + f->size) {
             /* We do normal add here because the location
-             * is important. */
+             * is important.  */
             arraylist_add(f->lines, line);
 
+            arraylist_add(f->words, FINITE_NEWLINE);
+
             /* We also do a smart add as new lines also
-             * should be considered a new words. */
+             * should be considered a new words.   */
             word = line;
-            arraylist_add(f->words, &f->newline);
             arraylist_add_smart(f->words, &f->h, word);
          }
       }
@@ -236,8 +241,9 @@ void finite_free(Finite *f) {
 }
 
 
-ArrayList *markov_nextwords(ArrayList *corpus, ArrayList *sentence, int pickiness) {
+char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int pickiness) {
    size_t i, j, start;
+   char *word;
    ArrayList *words;
 
    words = arraylist_new();
@@ -252,19 +258,22 @@ ArrayList *markov_nextwords(ArrayList *corpus, ArrayList *sentence, int pickines
        * occurences. So if the string is the same, the
        * address is also the same   */
       if (sentence->data[start] == corpus->data[i]) {
-         for (j = 0; j < (unsigned int) pickiness; j++) {
+         for (j = 0; j < pickiness; j++) {
             if (sentence->data[start + j] != corpus->data[i + j]) {
                break;
             }
          }
-         if (j == (unsigned int) pickiness) {
+         if (j == pickiness) {
              i += pickiness;
              arraylist_add(words, corpus->data[i]);
          }
       }
    }
 
-   return words;
+   word = words->length > 0 ? words->data[rand() % words->length] : NULL;
+   arraylist_free(words);
+
+   return word;
 }
 
 /* The heart of this program. It generates a sentence based
@@ -275,10 +284,10 @@ ArrayList *markov_nextwords(ArrayList *corpus, ArrayList *sentence, int pickines
  *      genereate the sentence.
  *    * `length`, which is simply the maximum number of
  *      words that we will have in our sentence.   */
-char *markov(Finite *corpus, int pickiness, size_t length) {
-   int i;
+char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
+   unsigned int i;
    char *str, *word;
-   ArrayList *sentence, *nextwords;
+   ArrayList *sentence;
 
    sentence = arraylist_new();
    word = corpus->lines->data[rand() % corpus->lines->length];
@@ -287,7 +296,11 @@ char *markov(Finite *corpus, int pickiness, size_t length) {
     * number of words so that we could go forth by choosing a
     * possible word that should follow.   */
    for (i = 0; i < pickiness; i++) {
-      if (word != NULL && *word != '\n') {
+      /* Yes, this basically says "if word is not NULL and word is not NULL"
+       * The reason though, even if FINITE_NEWLINE expands to NULL, the code
+       * is more readable this way. It won't affect any performance either as
+       * the compiler will optimise it away. */
+      if (word != NULL && word != FINITE_NEWLINE) {
          arraylist_add_smart(sentence, &corpus->h, word);
          word = finite_nextword(corpus, word);
          length--;
@@ -297,20 +310,20 @@ char *markov(Finite *corpus, int pickiness, size_t length) {
       }
    }
 
-   while (length-- && i == pickiness && *word != '\n') {
-      if ((nextwords = markov_nextwords(corpus->words, sentence, pickiness)
-               )->length > 0) {
-         /* Line breaks are also considered words. This will terminate
-          * the sentence a natural way.   */
-         if (*(word = nextwords->data[rand() % nextwords->length]) != '\n') {
-            arraylist_add(sentence, word);
-         }
-            
-         arraylist_free(nextwords);
-
+   while (length-- && i == pickiness) {
+      /* Line breaks are also considered words. This will terminate
+       * the sentence a natural way.
+       *
+       * As a side effect, this will also terminate the sentence if
+       * there are no matching next word, because `markov_nextword`
+       * returns NULL for both cases.
+       *
+       * See commentary above.   */
+      word = markov_nextword(corpus->words, sentence, pickiness);
+      if (word != NULL && word != FINITE_NEWLINE) {
+         arraylist_add(sentence, word);
       }
       else {
-         arraylist_free(nextwords);
          break;
       }
    }
@@ -355,16 +368,22 @@ int compare(const void *p1, const void *p2) {
 void printchr_iterate(char c, size_t length) {
    char *str;
 
-   if ((str = malloc(sizeof(char) * length)) == NULL) {
-      perror("Can't allocate space");
-      exit(EXIT_FAILURE);
+   if (length > 0) {
+      if ((str = malloc(sizeof(char) * length + 1)) == NULL) {
+         perror(NULL);
+         exit(EXIT_FAILURE);
+      }
+      memset(str, c, length);
+      str[length] = '\0';
+
+      printf("%s", str);
+
+      free(str);
    }
-   memset(str, c, sizeof(char) * length);
-   *(str + length) = '\0';
+}
 
-   printf("%s", str);
-
-   free(str);
+double ts2d(struct timespec *ts) {
+   return ts->tv_sec + (long double) ts->tv_nsec / 1000000000L;
 }
 
 /* This function outputs some nice numbers to make our
@@ -372,34 +391,33 @@ void printchr_iterate(char c, size_t length) {
  * preparation and generation times, and then prints the
  * results into a nice graph.
  *
- * It is ported from kqr's `fast_markov.py` at:
- *
  * The argument specifies how many times we want to
  * generate a sentence.  */
 void markov_timer(int times) {
    int i, quarter, len1, len2, len3, len4;
    double scaling, preptime, min, q1, q2, q3, max;
-   clock_t start, end; 
    double *times_;
    char *sentence;
+   struct timespec start, end;
    Finite *corpus;
 
-   start = clock();
+   clock_gettime(CLOCK_MONOTONIC, &start);
    corpus = finite_load("corpus.txt");
    finite_prepare(corpus);
-   end = clock();
-   preptime = ((double) (end - start)) / CLOCKS_PER_SEC;
- 
+   clock_gettime(CLOCK_MONOTONIC, &end);
+
+   preptime = ts2d(&tsdiff(end, start));
+
    if ((times_ = malloc(sizeof(double) * times)) == NULL) {
       perror("Can't allocate space");
       exit(EXIT_FAILURE);
    }
    for (i = 0; i < times; i++) {
-      start = clock();
-      sentence = markov(corpus, 3, 16);
-      end = clock();
+      clock_gettime(CLOCK_MONOTONIC, &start);
+      sentence = markov(corpus, 2, 16);
+      clock_gettime(CLOCK_MONOTONIC, &end);
 
-      times_[i] = ((double) (end - start)) / CLOCKS_PER_SEC;
+      times_[i] = ts2d(&tsdiff(end, start));
 
       printf("%s\n", sentence); 
 
@@ -421,22 +439,22 @@ void markov_timer(int times) {
    len3    = (q3 - q2)  * scaling;
    len4    = (max - q3) * scaling;
 
-   printf("\nPreparation time: %.2f seconds\n", preptime);
-   printf("Generated %u, sentences in %.2f seconds. (average time was %.2f seconds)\n",
+   printf("\nPreparation time: %.3f seconds\n", preptime);
+   printf("Generated %u sentences in %.3f seconds. (average time was %.3f seconds)\n",
           (unsigned int) i,
           sum(times_, i),
           sum(times_, i) / i);
-   printf("Total amount of time: %.2f seconds\n", sum(times_, i) + preptime);
+   printf("Total amount of time: %.3f seconds\n", sum(times_, i) + preptime);
 
-   printf("<%.2f", min);
+   printf("<%.3f", min);
    printchr_iterate('-', len1);
-   printf("[%.2f", q1);
+   printf("[%.3f", q1);
    printchr_iterate('-', len2);
-   printf("|%.2f|", q2);
+   printf("|%.3f|", q2);
    printchr_iterate('-', len3);
-   printf("%.2f]", q3);
+   printf("%.3f]", q3);
    printchr_iterate('-', len4);
-   printf("%.2f>\n", max);
+   printf("%.3f>\n", max);
 
    free(times_);
    finite_free(corpus);
@@ -446,7 +464,7 @@ void markov_timer(int times) {
 int main() {
    srand(time(NULL));
 
-   markov_timer(10);
+   markov_timer(100);
    
    return EXIT_SUCCESS;
 }
