@@ -11,4 +11,4 @@ clean:
 	rm -rf $(BIN)
 
 $(BIN): uthash.h
-	$(CC) $(CFLAGS) -o $(BIN) markov.c -lrt -lm
+	$(CC) $(CFLAGS) -o $(BIN) markov.c -lrt
