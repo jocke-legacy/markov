@@ -176,7 +176,6 @@ Finite *finite_load(char *filename) {
       perror("Error while loading file");
       exit(EXIT_FAILURE);
    }
-
    if (fread(f->data, f->size, 1, fd) != 1) {
       perror("Error while reading file");
       exit(EXIT_FAILURE);
@@ -241,6 +240,10 @@ char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int picki
    size_t i, j, start;
    char *word;
    ArrayList *words;
+
+   if (pickiness == 0) {
+      return NULL;
+   }
 
    words = arraylist_new();
    start = (sentence->length - 1) - (pickiness - 1);
