@@ -252,7 +252,7 @@ char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int picki
        * `arraylist_add_smart` used in `finite_prepare` and
        * `markov` maps existing words to their first
        * occurences. So if the string is the same, the
-       * address is also the same   */
+       * address is also the same.  */
       if (sentence->data[start] == corpus->data[i]) {
          for (j = 0; j < pickiness; j++) {
             if (sentence->data[start + j] != corpus->data[i + j]) {
@@ -292,9 +292,10 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
     * number of words so that we could go forth by choosing a
     * possible word that should follow.   */
    for (i = 0; i < pickiness; i++) {
-      /* Yes, this basically says "if word is not NULL and word is not NULL"
-       * The reason though, even if FINITE_NEWLINE expands to NULL, the code
-       * is more readable this way. */
+      /* FINITE_NEWLINE represents a newline in corpus.
+       * This basically says "if word is not NULL and word is not NULL".
+       * The reason though is, even if FINITE_NEWLINE expands to NULL,
+       * the code is more readable this way. */
       if (word != NULL && word != FINITE_NEWLINE) {
          arraylist_add_smart(sentence, &corpus->h, word);
          word = finite_nextword(corpus, word);
@@ -307,7 +308,7 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
 
    while (length-- && i == pickiness) {
       /* Line breaks are also considered words. This will terminate
-       * the sentence a natural way.
+       * the sentence in a natural way.
        *
        * See commentary above.   */
       word = markov_nextword(corpus->words, sentence, pickiness);
