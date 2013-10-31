@@ -1,30 +1,36 @@
+#ifdef __unix__
 #define _POSIX_C_SOURCE 200809L
+
+#define timespec_diff(a, b) (struct timespec) { a.tv_sec  - b.tv_sec,    \
+                                                a.tv_nsec - b.tv_nsec }
+
+#define NANOSECS_IN_SEC 1000000000L
+
+#define __INCLUDE_BENCHMARK__
+#else
+#undef  __INCLUDE_BENCHMARK__
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h>
+#include <math.h>
 
-#include "uthash.h"
-
-#define tsdiff(a, b) (struct timespec) { a.tv_sec  - b.tv_sec,    \
-                                         a.tv_nsec - b.tv_nsec }
-
-#define ARRAYLIST_ALLOCATION_SIZE 1024 
-#define FINITE_NEWLINE            NULL
-#define NANOSECS_IN_SEC           1000000000L
-
-
-typedef struct {
-   char *key;
-   UT_hash_handle hh;
-} HashTable;
+#define FINITE_NEWLINE NULL
 
 typedef struct {
    size_t length;
    size_t allocated;
    char **data;
 } ArrayList;
+
+typedef struct {
+   int hashlength;
+   ArrayList **buckets;
+} HashTable;
 
 /* This structure represents a finite file in
  * the form of its size, data, words and lines
@@ -42,51 +48,58 @@ typedef struct {
 
 
 ArrayList *arraylist_new(void);
-void arraylist_add(ArrayList *al, char *value);
-void arraylist_add_smart(ArrayList *al, HashTable **h, char *value);
-void hash_free(HashTable **h); 
+char *arraylist_add(ArrayList *al, char *value);
+char *arraylist_add_smart(ArrayList *al, HashTable *h, char *value);
 char *arraylist_str(ArrayList *al, char *delimiter);
 void arraylist_free(ArrayList *al);
+HashTable *hashtable_new(int hashlength);
+char *hashtable_add(HashTable *h, char *value);
+char *hashtable_find(HashTable *h, char *value);
+uint32_t hashtable_fnvhasher(char *str);
+uint32_t hashtable_jenkins(char *str);
+void hashtable_free(HashTable *h); 
 Finite *finite_load(char *filename);
+int finite_filter(Finite *f);
 char *finite_nextword(Finite *f, char *word);
-void finite_prepare(Finite *f);
+int finite_prepare(Finite *f);
 void finite_free(Finite *f);
-char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int pickiness);
-char *markov(Finite *corpus, unsigned int pickiness, size_t length);
+char *markov_nextword(ArrayList *corpus, ArrayList *sentence, int pickiness);
+char *markov(Finite *corpus, int pickiness, size_t length);
 
 /* Benchmarking functions and their needs. */
+#ifdef __INCLUDE_BENCHMARK__
 double sum(double *arr, size_t length);
 int compare(const void *p1, const void *p2);
-void printchr_iterate(char c, size_t length);
-double ts2d(struct timespec *ts);
-void markov_timer(int times);
+void char_repeat(char c, size_t length);
+double timespec2double(struct timespec *ts);
+void markov_benchmark(int times, int pickiness, char *filename);
+#endif
 
 
 ArrayList *arraylist_new(void) {
    ArrayList *al;
 
    if ((al = malloc(sizeof(ArrayList))) == NULL) {
-      perror("Error while creating list");
-      exit(EXIT_FAILURE);
+      return NULL;
    }
-
    memset(al, 0, sizeof(ArrayList));
-   al->allocated = 1;
 
    return al;
 }
 
-void arraylist_add(ArrayList *al, char *value) {
-   if (al->length == al->allocated || al->allocated == 1) {
-      al->allocated *= al->allocated == 1 ? ARRAYLIST_ALLOCATION_SIZE : 2;
-      if ((al->data = realloc(al->data, sizeof(char *) * al->allocated))
-            == NULL) {
-         perror("Error while adding element to list");
-         exit(EXIT_FAILURE);
-      }
+char *arraylist_add(ArrayList *al, char *value) {
+   if (al == NULL) {
+      return NULL;
    }
 
+   if (al->length == al->allocated) {
+      if ((al->data = realloc(al->data, sizeof(char *) * (al->allocated += 4))) == NULL) {
+         return NULL;
+      }
+   }
    al->data[al->length++] = value;
+
+   return value;
 }
 
 /* This is an alternative way to add strings to our
@@ -97,37 +110,19 @@ void arraylist_add(ArrayList *al, char *value) {
  * This gives us the oppertunity to compare strings
  * with pointers (which is fast) instead of using
  * `strcmp`.   */
-void arraylist_add_smart(ArrayList *al, HashTable **h, char *value) {
-   char *key;
-   HashTable *new, *found;
-
-   key = value;
-
-   HASH_FIND_STR(*h, key, found);
-   if (found != NULL) {
-      value = found->key;
+char *arraylist_add_smart(ArrayList *al, HashTable *h, char *value) {
+   char *found;
+   
+   if ((found = hashtable_find(h, value)) != NULL) {
+      value = found;
    }
    else {
-      if ((new = malloc(sizeof(HashTable))) == NULL) {
-         perror("Error while adding row to hash table");
-         exit(EXIT_FAILURE);
-      }
-      new->key = key;
-      HASH_ADD_KEYPTR(hh, *h, key, strlen(key), new);
+      hashtable_add(h, value);
    }
 
-   arraylist_add(al, value);
+   return arraylist_add(al, value);
 }
 
-void hash_free(HashTable **h) {
-   HashTable *curr, *tmp;
-
-   HASH_ITER(hh, *h, curr, tmp) {
-      HASH_DEL(*h, curr);
-      free(curr);
-   }
-   *h = NULL;
-}
 
 char *arraylist_str(ArrayList *al, char *delimiter) {
    size_t i, str_length;
@@ -139,8 +134,7 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
    str_length += al->length - 1;
 
    if ((str = malloc(sizeof(char) * str_length + strlen(delimiter) + 1)) == NULL) {
-      perror(NULL);
-      exit(EXIT_FAILURE);
+      return NULL;
    }
    for (i = 0, *str = '\0'; i < al->length; i++) {
       strcat(strcat(str, al->data[i]), delimiter);
@@ -151,8 +145,106 @@ char *arraylist_str(ArrayList *al, char *delimiter) {
 }
 
 void arraylist_free(ArrayList *al) {
+   if (al == NULL) {
+      return;
+   }
+
    free(al->data);
    free(al);
+}
+
+
+HashTable *hashtable_new(int hashlength) {
+   HashTable *h;
+
+   if ((h = malloc(sizeof(HashTable))) == NULL) {
+      return NULL;
+   }
+
+   if ((h->buckets = malloc(sizeof(ArrayList *) * (1 << hashlength))) == NULL) {
+      return NULL;
+   }
+   memset(h->buckets, 0, sizeof(ArrayList *) * (1 << hashlength));
+
+   h->hashlength = hashlength;
+
+   return h;
+}
+
+char *hashtable_add(HashTable *h, char *value) {
+   uint32_t key;
+
+   key = hashtable_jenkins(value) >> (32 - h->hashlength);
+
+   if (h->buckets[key] == NULL) {
+      h->buckets[key] = arraylist_new();
+   }
+
+   return arraylist_add(h->buckets[key], value);
+}
+
+char *hashtable_find(HashTable *h, char *value) {
+   size_t i;
+   uint32_t key;
+   char *element;
+
+   key = hashtable_jenkins(value) >> (32 - h->hashlength);
+
+   if (h->buckets[key] != NULL) {
+      for (i = 0; i < h->buckets[key]->length; i++) {
+         element = h->buckets[key]->data[i];
+         if (strcmp(element, value) == 0) {
+            return element;
+         }
+      }
+   }
+
+   return NULL;
+}
+
+uint32_t hashtable_fnvhasher(char *str) {
+   uint32_t hash;
+   char *ptr;
+
+   ptr = str;
+   hash = 2166136261; 
+
+   while (*ptr != '\0') {
+      hash *= 16777619;
+      hash ^= *ptr++;
+   }
+
+   return hash;
+}
+
+uint32_t hashtable_jenkins(char *str) {
+   uint32_t hash, i;
+
+   for (i = hash = 0; i < strlen(str); i++) {
+      hash += str[i];
+      hash += (hash << 10);
+      hash ^= (hash >> 6);
+   }
+   hash += (hash << 3);
+   hash ^= (hash >> 11);
+   hash += (hash << 15);
+
+
+   return hash;
+}
+
+void hashtable_free(HashTable *h) {
+   size_t i;
+   
+   if (h == NULL) {
+      return;
+   }
+
+   for (i = 0; i < (1U << h->hashlength) - 1; i++) {
+      arraylist_free(h->buckets[i]);
+   }
+   free(h->buckets);
+   free(h);
 }
 
 
@@ -161,11 +253,9 @@ Finite *finite_load(char *filename) {
    Finite *f;
 
    f = malloc(sizeof(Finite));
-   f->h = NULL;
 
    if ((fd = fopen(filename, "r")) == NULL) {
-      perror("Error while openining file");
-      exit(EXIT_FAILURE);
+      return NULL;
    }
 
    fseek(fd, 0, SEEK_END);
@@ -173,36 +263,64 @@ Finite *finite_load(char *filename) {
    rewind(fd);
 
    if ((f->data = malloc(sizeof(char) * f->size)) == NULL) {
-      perror("Error while loading file");
-      exit(EXIT_FAILURE);
+      return NULL;
    }
    if (fread(f->data, f->size, 1, fd) != 1) {
-      perror("Error while reading file");
-      exit(EXIT_FAILURE);
+      return NULL;
    }
    f->data[f->size - 1] = '\0';
-
+   
    fclose(fd);
 
    return f;
 }
 
-char *finite_nextword(Finite *f, char *word) {
-   return  (word += strlen(word) + 1) < f->data + f->size - 1 ? word : NULL;
+int finite_filter(Finite *f) {
+   size_t offset;
+   char *newline, *buf;
+
+   offset = 0;
+   newline = f->data;
+   while ((buf = strchr(newline, '>')) != NULL) {
+      buf += 2;
+      if ((newline = strchr(buf, '\n')) != NULL) {
+         memmove(&f->data[offset], buf, newline - buf + 1);
+
+         offset += newline - buf + 1;
+      }
+      else {
+         memmove(&f->data[offset], buf, strlen(buf) + 1);
+         f->data = realloc(f->data, sizeof(char) *
+                                    (size_t) &buf[strlen(buf) + 1] - (size_t) f->data);
+         
+         break;
+      }
+   }
+
+   return 0;
 }
 
-void finite_prepare(Finite *f) {
+char *finite_nextword(Finite *f, char *word) {
+   return (word += strlen(word) + 1) < f->data + f->size - 1 ? word : NULL;
+}
+
+int finite_prepare(Finite *f) {
    char *word;
    char *line;
 
-   f->words  = arraylist_new();
-   f->lines  = arraylist_new();
- 
+   if ((f->h      = hashtable_new(20)) == NULL ||
+       (f->words  = arraylist_new())   == NULL ||
+       (f->lines  = arraylist_new())   == NULL) {
+       return 0;
+   }
+
+   finite_filter(f);
+
    word = strtok(f->data, " ");
    while (word != NULL) {
-      arraylist_add_smart(f->words, &f->h, word);
+      arraylist_add_smart(f->words, f->h, word);
 
-       /* This is a manual `strtok` for newlines. The reason
+      /* This is a manual `strtok` for newlines. The reason
        * for this is because standard strtok doesn't give
        * us the control we need to distinguish between
        * given delimiters, so that we can do different
@@ -219,16 +337,22 @@ void finite_prepare(Finite *f) {
             /* We also do a smart add as new lines also
              * should be considered a new words.   */
             word = line;
-            arraylist_add_smart(f->words, &f->h, word);
+            arraylist_add_smart(f->words, f->h, word);
          }
       }
 
       word = strtok(NULL, " ");
    }
+
+   return 1;
 }
 
 void finite_free(Finite *f) {
-   hash_free(&f->h);
+   if (f == NULL) {
+      return;
+   }
+
+   hashtable_free(f->h);
    arraylist_free(f->lines);
    arraylist_free(f->words);
    free(f->data);
@@ -236,8 +360,9 @@ void finite_free(Finite *f) {
 }
 
 
-char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int pickiness) {
-   size_t i, j, start;
+char *markov_nextword(ArrayList *corpus, ArrayList *sentence, int pickiness) {
+   int j;
+   size_t i, start;
    char *word;
    ArrayList *words;
 
@@ -245,7 +370,9 @@ char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int picki
       return NULL;
    }
 
-   words = arraylist_new();
+   if ((words = arraylist_new()) == NULL) {
+      return NULL;
+   }
    start = (sentence->length - 1) - (pickiness - 1);
 
    /* The selection of possible words should satisfy the `pickiness`
@@ -283,12 +410,14 @@ char *markov_nextword(ArrayList *corpus, ArrayList *sentence, unsigned int picki
  *      genereate the sentence.
  *    * `length`, which is simply the maximum number of
  *      words that we will have in our sentence.   */
-char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
-   unsigned int i;
+char *markov(Finite *corpus, int pickiness, size_t length) {
+   int i;
    char *str, *word;
    ArrayList *sentence;
 
-   sentence = arraylist_new();
+   if ((sentence = arraylist_new()) == NULL) {
+      return NULL;
+   }
    word = corpus->lines->data[rand() % corpus->lines->length];
 
    /* To generate a sentence we first of all prepares `pickiness`
@@ -300,7 +429,9 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
        * The reason though is, even if FINITE_NEWLINE expands to NULL,
        * the code is more readable this way. */
       if (word != NULL && word != FINITE_NEWLINE) {
-         arraylist_add_smart(sentence, &corpus->h, word);
+         if (arraylist_add(sentence, word) == NULL) {
+            break;
+         }
          word = finite_nextword(corpus, word);
          length--;
       }
@@ -319,6 +450,7 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
          arraylist_add(sentence, word);
       }
       else {
+//         printf("this sux\n\n");
          break;
       }
    }
@@ -331,7 +463,7 @@ char *markov(Finite *corpus, unsigned int pickiness, size_t length) {
 
 
 /* Benchmarking functions and their needs. */
-
+#ifdef __INCLUDE_BENCHMARK__
 double sum(double *arr, size_t length) {
    double sum_;
    size_t i;
@@ -360,24 +492,16 @@ int compare(const void *p1, const void *p2) {
    }
 }
 
-void printchr_iterate(char c, size_t length) {
-   char *str;
-
-   if (length > 0) {
-      if ((str = malloc(sizeof(char) * length + 1)) == NULL) {
-         perror(NULL);
-         exit(EXIT_FAILURE);
-      }
-      memset(str, c, length);
-      str[length] = '\0';
-
-      printf("%s", str);
-
-      free(str);
+/* This function returns a string with a repeated character.
+ * Note that the `buf` argument must be NULL or an allocated
+ * adress on the heap.  */
+void char_repeat(char c, size_t length) {
+   while (length--) {
+      putchar(c);
    }
 }
 
-double ts2d(struct timespec *ts) {
+double timespec2double(struct timespec *ts) {
    return ts->tv_sec + (long double) ts->tv_nsec / NANOSECS_IN_SEC;
 }
 
@@ -386,47 +510,48 @@ double ts2d(struct timespec *ts) {
  * preparation and generation times, and then prints the
  * results into a nice graph.
  *
- * The argument specifies how many times we want to
- * generate a sentence.  */
-void markov_timer(int times) {
+ * The arguments specifices the number of sentences to generate,
+ * the pickiness and the filename of the corpus to use.  */
+void markov_benchmark(int n, int pickiness, char *filename) {
    int i, quarter, len1, len2, len3, len4;
    double scaling, preptime, min, q1, q2, q3, max;
-   double *times_;
+   double *times;
    char *sentence;
    struct timespec start, end;
    Finite *corpus;
 
    clock_gettime(CLOCK_MONOTONIC, &start);
-   corpus = finite_load("corpus.txt");
+   corpus = finite_load(filename);
    finite_prepare(corpus);
    clock_gettime(CLOCK_MONOTONIC, &end);
 
-   preptime = ts2d(&tsdiff(end, start));
+   preptime = timespec2double(&timespec_diff(end, start));
 
-   if ((times_ = malloc(sizeof(double) * times)) == NULL) {
+   if ((times = malloc(sizeof(double) * n)) == NULL) {
       perror(NULL);
       exit(EXIT_FAILURE);
    }
-   for (i = 0; i < times; i++) {
+   for (i = 0; i < n; i++) {
       clock_gettime(CLOCK_MONOTONIC, &start);
-      sentence = markov(corpus, 2, 16);
+      sentence = markov(corpus, pickiness, 16);
       clock_gettime(CLOCK_MONOTONIC, &end);
 
-      times_[i] = ts2d(&tsdiff(end, start));
+      times[i] = timespec2double(&timespec_diff(end, start));
 
       printf("%s\n", sentence); 
 
       free(sentence);
    }
+   finite_free(corpus);
 
-   qsort(times_, i, sizeof(double), compare);
+   qsort(times, i, sizeof(double), compare);
    quarter = i / 4;
 
-   min = times_[0];
-   q1  = times_[1 * quarter];
-   q2  = times_[2 * quarter];
-   q3  = times_[3 * quarter];
-   max = times_[i - 1];
+   min = times[0];
+   q1  = times[1 * quarter];
+   q2  = times[2 * quarter];
+   q3  = times[3 * quarter];
+   max = times[i - 1];
 
    scaling = 50 / (max - min);
    len1    = (q1 - min) * scaling;
@@ -435,31 +560,68 @@ void markov_timer(int times) {
    len4    = (max - q3) * scaling;
 
    printf("\nPreparation time: %.3f seconds\n", preptime);
-   printf("Generated %u sentences in %.3f seconds. (average time was %.3f seconds)\n",
-          (unsigned int) i,
-          sum(times_, i),
-          sum(times_, i) / i);
-   printf("Total amount of time: %.3f seconds\n", sum(times_, i) + preptime);
+   printf("Generated %d sentences in %.3f seconds. (average time was %.3f seconds)\n",
+          i,
+          sum(times, i),
+          sum(times, i) / i);
+   printf("Total amount of time: %.3f seconds\n", sum(times, i) + preptime);
 
-   printf("<%.3f", min);
-   printchr_iterate('-', len1);
-   printf("[%.3f", q1);
-   printchr_iterate('-', len2);
-   printf("|%.3f|", q2);
-   printchr_iterate('-', len3);
-   printf("%.3f]", q3);
-   printchr_iterate('-', len4);
-   printf("%.3f>\n", max);
+   printf("<%.3f" , min); char_repeat('-', len1);
+   printf("[%.3f" , q1 ); char_repeat('-', len2);
+   printf("|%.3f|", q2 ); char_repeat('-', len3);
+   printf("%.3f]" , q3 ); char_repeat('-', len4);
+   printf("%.3f>" , max);
 
-   free(times_);
-   finite_free(corpus);
+   free(times);
 }
+#endif
 
 
-int main() {
+
+int main(int argc, char **argv) {
+   int i;
+   char *sentence;
+   Finite *corpus;
+
    srand(time(NULL));
 
-   markov_timer(100);
-   
+   switch (argc) {
+#ifdef __INCLUDE_BENCHMARK__
+      case 5:
+         if (strcmp(argv[1], "benchmark") == 0 && isdigit(argv[2][0])
+             && isdigit(argv[3][0])) {
+            markov_benchmark(atoi(argv[2]), atoi(argv[3]), argv[4]);
+         }
+
+         return EXIT_SUCCESS;
+#endif
+
+      case 4:
+         if (!isdigit(argv[1][0]) || !isdigit(argv[2][0])) {
+            return EXIT_SUCCESS;
+         }
+
+         break;
+
+      default:
+         return EXIT_SUCCESS;
+   }
+
+   if ((corpus = finite_load(argv[3])) == NULL ||
+       !finite_prepare(corpus)) {
+      finite_free(corpus);
+      return EXIT_SUCCESS;
+   }
+
+   for (i = 0; i < atoi(argv[1]); i++) {
+      sentence = markov(corpus, atoi(argv[2]), 16);
+
+      printf("%s\n", sentence); 
+
+      free(sentence);
+   }
+
+   finite_free(corpus);
+
    return EXIT_SUCCESS;
 }

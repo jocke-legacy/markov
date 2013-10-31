@@ -6,7 +6,7 @@ explainations in the code.
 
 ## Licensing
 
-All code (except uthash and/or any separate copyright notices) is licensed under the terms of the 3-clause BSD-License:
+All code is licensed under the terms of the 3-clause BSD-License:
 
     Copyright (c) 2013, jocke-l
     All rights reserved.
