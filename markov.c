@@ -28,7 +28,8 @@ typedef struct {
 } ArrayList;
 
 typedef struct {
-   int hashlength;
+   uint8_t hashlength;
+   size_t size;
    ArrayList **buckets;
 } HashTable;
 
@@ -48,14 +49,13 @@ typedef struct {
 
 
 ArrayList *arraylist_new(void);
-char *arraylist_add(ArrayList *al, char *value);
-char *arraylist_add_smart(ArrayList *al, HashTable *h, char *value);
+int arraylist_add(ArrayList *al, char *value);
+int arraylist_add_smart(ArrayList *al, HashTable *h, char *value);
 char *arraylist_str(ArrayList *al, char *delimiter);
 void arraylist_free(ArrayList *al);
-HashTable *hashtable_new(int hashlength);
-char *hashtable_add(HashTable *h, char *value);
-char *hashtable_find(HashTable *h, char *value);
-uint32_t hashtable_fnvhasher(char *str);
+HashTable *hashtable_new(uint8_t hashlength);
+int hashtable_add(HashTable *h, char *value);
+int hashtable_find(HashTable *h, char *value, char **found);
 uint32_t hashtable_jenkins(char *str);
 void hashtable_free(HashTable *h); 
 Finite *finite_load(char *filename);
@@ -87,19 +87,20 @@ ArrayList *arraylist_new(void) {
    return al;
 }
 
-char *arraylist_add(ArrayList *al, char *value) {
-   if (al == NULL) {
-      return NULL;
-   }
+int arraylist_add(ArrayList *al, char *value) {
+   char **data;
 
    if (al->length == al->allocated) {
-      if ((al->data = realloc(al->data, sizeof(char *) * (al->allocated += 4))) == NULL) {
-         return NULL;
+      if ((data = realloc(al->data, sizeof(char *) * (al->allocated += 4))) == NULL) {
+         return 0;
+      }
+      else {
+         al->data = data;
       }
    }
    al->data[al->length++] = value;
 
-   return value;
+   return 1;
 }
 
 /* This is an alternative way to add strings to our
@@ -110,10 +111,10 @@ char *arraylist_add(ArrayList *al, char *value) {
  * This gives us the oppertunity to compare strings
  * with pointers (which is fast) instead of using
  * `strcmp`.   */
-char *arraylist_add_smart(ArrayList *al, HashTable *h, char *value) {
+int arraylist_add_smart(ArrayList *al, HashTable *h, char *value) {
    char *found;
    
-   if ((found = hashtable_find(h, value)) != NULL) {
+   if (hashtable_find(h, value, &found)) {
       value = found;
    }
    else {
@@ -154,24 +155,27 @@ void arraylist_free(ArrayList *al) {
 }
 
 
-HashTable *hashtable_new(int hashlength) {
+HashTable *hashtable_new(uint8_t hashlength) {
    HashTable *h;
 
    if ((h = malloc(sizeof(HashTable))) == NULL) {
+      hashtable_free(h);
       return NULL;
    }
 
-   if ((h->buckets = malloc(sizeof(ArrayList *) * (1 << hashlength))) == NULL) {
+   h->size = 1 << hashlength;
+   if ((h->buckets = malloc(sizeof(ArrayList *) * h->size)) == NULL) {
+      hashtable_free(h);
       return NULL;
    }
-   memset(h->buckets, 0, sizeof(ArrayList *) * (1 << hashlength));
+   memset(h->buckets, 0, sizeof(ArrayList *) * h->size);
 
    h->hashlength = hashlength;
 
    return h;
 }
 
-char *hashtable_add(HashTable *h, char *value) {
+int hashtable_add(HashTable *h, char *value) {
    uint32_t key;
 
    key = hashtable_jenkins(value) >> (32 - h->hashlength);
@@ -183,7 +187,7 @@ char *hashtable_add(HashTable *h, char *value) {
    return arraylist_add(h->buckets[key], value);
 }
 
-char *hashtable_find(HashTable *h, char *value) {
+int hashtable_find(HashTable *h, char *value, char **found) {
    size_t i;
    uint32_t key;
    char *element;
@@ -193,32 +197,24 @@ char *hashtable_find(HashTable *h, char *value) {
    if (h->buckets[key] != NULL) {
       for (i = 0; i < h->buckets[key]->length; i++) {
          element = h->buckets[key]->data[i];
-         if (strcmp(element, value) == 0) {
-            return element;
+         if ((       element == value && value == NULL) ||
+             (strcmp(element,   value)         == 0)) {
+            *found = element;
+            return 1;
          }
       }
    }
 
-   return NULL;
-}
-
-uint32_t hashtable_fnvhasher(char *str) {
-   uint32_t hash;
-   char *ptr;
-
-   ptr = str;
-   hash = 2166136261; 
-
-   while (*ptr != '\0') {
-      hash *= 16777619;
-      hash ^= *ptr++;
-   }
-
-   return hash;
+   return 0;
 }
 
 uint32_t hashtable_jenkins(char *str) {
    uint32_t hash, i;
+
+   if (str    == NULL ||
+       str[0] == '\0') {
+      return 0;
+   }
 
    for (i = hash = 0; i < strlen(str); i++) {
       hash += str[i];
@@ -240,7 +236,7 @@ void hashtable_free(HashTable *h) {
       return;
    }
 
-   for (i = 0; i < (1U << h->hashlength) - 1; i++) {
+   for (i = 0; i < h->size; i++) {
       arraylist_free(h->buckets[i]);
    }
    free(h->buckets);
@@ -255,6 +251,7 @@ Finite *finite_load(char *filename) {
    f = malloc(sizeof(Finite));
 
    if ((fd = fopen(filename, "r")) == NULL) {
+      finite_free(f);
       return NULL;
    }
 
@@ -263,9 +260,11 @@ Finite *finite_load(char *filename) {
    rewind(fd);
 
    if ((f->data = malloc(sizeof(char) * f->size)) == NULL) {
+      finite_free(f);
       return NULL;
    }
    if (fread(f->data, f->size, 1, fd) != 1) {
+      finite_free(f);
       return NULL;
    }
    f->data[f->size - 1] = '\0';
@@ -297,20 +296,24 @@ int finite_filter(Finite *f) {
       }
    }
 
-   return 0;
+   return 1;
 }
 
 char *finite_nextword(Finite *f, char *word) {
-   return (word += strlen(word) + 1) < f->data + f->size - 1 ? word : NULL;
+   word += strlen(word) + 1;
+   return word < f->data + f->size - 1 ? word : NULL;
 }
 
 int finite_prepare(Finite *f) {
-   char *word;
-   char *line;
+   char *word, *line;
+   int i;
 
    if ((f->h      = hashtable_new(20)) == NULL ||
        (f->words  = arraylist_new())   == NULL ||
        (f->lines  = arraylist_new())   == NULL) {
+      hashtable_free(f->h);
+      arraylist_free(f->words);
+      arraylist_free(f->lines);
        return 0;
    }
 
@@ -318,6 +321,11 @@ int finite_prepare(Finite *f) {
 
    word = strtok(f->data, " ");
    while (word != NULL) {
+      line = word;
+      for (i = 0; (line = strchr(line, '\n')) != NULL; i++) {
+         *line++ = '\0';
+      }
+ 
       arraylist_add_smart(f->words, f->h, word);
 
       /* This is a manual `strtok` for newlines. The reason
@@ -325,13 +333,14 @@ int finite_prepare(Finite *f) {
        * us the control we need to distinguish between
        * given delimiters, so that we can do different
        * operations depending on what we'd hit. */
-      if ((line = strchr(word, '\n')) != NULL) {
-         *line = '\0';
-         if (++line < f->data + f->size) {
+      if (i > 0) {
+         line = word;
+         while (i--) {
+            line = finite_nextword(f, line);
+
             /* We do normal add here because the location
              * is important.  */
             arraylist_add(f->lines, line);
-
             arraylist_add(f->words, FINITE_NEWLINE);
 
             /* We also do a smart add as new lines also
@@ -361,8 +370,7 @@ void finite_free(Finite *f) {
 
 
 char *markov_nextword(ArrayList *corpus, ArrayList *sentence, int pickiness) {
-   int j;
-   size_t i, start;
+   size_t i, j, start;
    char *word;
    ArrayList *words;
 
@@ -384,13 +392,13 @@ char *markov_nextword(ArrayList *corpus, ArrayList *sentence, int pickiness) {
        * occurences. So if the string is the same, the
        * address is also the same.  */
       if (sentence->data[start] == corpus->data[i]) {
-         for (j = 0; j < pickiness; j++) {
+         for (j = 0; j < (size_t) pickiness; j++) {
             if (sentence->data[start + j] != corpus->data[i + j]) {
                break;
             }
          }
-         if (j == pickiness) {
-             i += pickiness;
+         if (j == (size_t) pickiness) {
+             i += (size_t) pickiness;
              arraylist_add(words, corpus->data[i]);
          }
       }
@@ -429,9 +437,7 @@ char *markov(Finite *corpus, int pickiness, size_t length) {
        * The reason though is, even if FINITE_NEWLINE expands to NULL,
        * the code is more readable this way. */
       if (word != NULL && word != FINITE_NEWLINE) {
-         if (arraylist_add(sentence, word) == NULL) {
-            break;
-         }
+         arraylist_add_smart(sentence, corpus->h, word);
          word = finite_nextword(corpus, word);
          length--;
       }
@@ -450,7 +456,6 @@ char *markov(Finite *corpus, int pickiness, size_t length) {
          arraylist_add(sentence, word);
       }
       else {
-//         printf("this sux\n\n");
          break;
       }
    }
@@ -570,12 +575,11 @@ void markov_benchmark(int n, int pickiness, char *filename) {
    printf("[%.3f" , q1 ); char_repeat('-', len2);
    printf("|%.3f|", q2 ); char_repeat('-', len3);
    printf("%.3f]" , q3 ); char_repeat('-', len4);
-   printf("%.3f>" , max);
+   printf("%.3f>\n" , max);
 
    free(times);
 }
 #endif
-
 
 
 int main(int argc, char **argv) {
@@ -592,25 +596,28 @@ int main(int argc, char **argv) {
              && isdigit(argv[3][0])) {
             markov_benchmark(atoi(argv[2]), atoi(argv[3]), argv[4]);
          }
+         else {
+            return EXIT_FAILURE;
+         }
 
          return EXIT_SUCCESS;
 #endif
 
       case 4:
          if (!isdigit(argv[1][0]) || !isdigit(argv[2][0])) {
-            return EXIT_SUCCESS;
+            return EXIT_FAILURE;
          }
 
          break;
 
       default:
-         return EXIT_SUCCESS;
+         return EXIT_FAILURE;
    }
 
    if ((corpus = finite_load(argv[3])) == NULL ||
        !finite_prepare(corpus)) {
       finite_free(corpus);
-      return EXIT_SUCCESS;
+      return EXIT_FAILURE;
    }
 
    for (i = 0; i < atoi(argv[1]); i++) {
