@@ -10,5 +10,5 @@ all: $(BIN)
 clean:
 	rm -rf $(BIN)
 
-$(BIN): uthash.h
+$(BIN): markov.c
 	$(CC) $(CFLAGS) -o $(BIN) markov.c -lrt
